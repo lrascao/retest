@@ -55,11 +55,16 @@ run(Args) ->
                     {error, {already_started, crypto}} -> ok
                  end,
 
+            %% Check for user specific test cases in a given target
+            TestCase = application:get_env(retest, test_case, undefined),
+            ?DEBUG("Test case: ~p\n", [TestCase]),
+
             %% Scan the list of targets and identify the specific test
             %% files
-            case scan_targets(Targets, []) of
+            case scan_targets(Targets, TestCase) of
                 [] ->
-                    ?ABORT("No test files (*_rt.erl) found in these targets!\n", []);
+                    ?ABORT("No test files (*_rt.erl) found in targets ~p!\n",
+                        [Targets]);
 
                 TestFiles ->
                     ?DEBUG("Test files: ~p\n", [TestFiles]),
@@ -95,7 +100,8 @@ options() ->
      {verbose,  $v, "verbose",  boolean, "Use debug level output"},
      {outdir,   $o, "outdir",   string,  "Directory to use for all test output"},
      {loglevel, $l, "loglevel", atom,    "Log output level: error, warn, info, debug"},
-     {timeout,  $t, "timeout",  integer, "Timeout value to apply to all tests (default: 30 seconds)"}
+     {timeout,  $t, "timeout",  integer, "Timeout value to apply to all tests (default: 30 seconds)"},
+     {'case',   $c, "case",     string, "Request a specific test case"}
     ].
 
 merge_options([]) ->
@@ -117,6 +123,9 @@ merge_options([{loglevel, Level} | Rest]) ->
 merge_options([{timeout, Timeout} | Rest]) ->
     application:set_env(retest, timeout, Timeout),
     merge_options(Rest);
+merge_options([{'case', TestCase} | Rest]) ->
+    application:set_env(retest, test_case, TestCase),
+    merge_options(Rest);
 merge_options([_Option | Rest]) ->
     merge_options(Rest).
 
@@ -128,22 +137,30 @@ test_files(Dir) ->
     filelib:wildcard(filename:join(Dir, "*_rt.erl")) ++
         filelib:wildcard(filename:join(Dir, "*/*_rt.erl")).
 
-scan_targets([], Acc) ->
+scan_targets(Targets, Case) ->
+    scan_targets(Targets, Case, []).
+
+scan_targets([], _Case, Acc) ->
     lists:reverse(Acc);
-scan_targets([Target | Rest], Acc) ->
+scan_targets([Target | Rest], Case, Acc) ->
     case is_test_file(Target) of
         true ->
-            scan_targets(Rest, [filename:absname(Target) | Acc]);
+            scan_targets(Rest, Case, [filename:absname(Target) | Acc]);
         false ->
             case filelib:is_dir(Target) of
                 true ->
-                    NewRest = test_files(Target) ++ Rest,
-                    scan_targets(NewRest, Acc);
+                    Target0 = maybe_append_test_case(Target, Case),
+                    NewRest = test_files(Target0) ++ Rest,
+                    scan_targets(NewRest, Case, Acc);
                 false ->
                     ?INFO("Ignoring ~p target; no tests found.\n", [Target]),
-                    scan_targets(Rest, Acc)
+                    scan_targets(Rest, Case, Acc)
             end
     end.
+
+maybe_append_test_case(Target, undefined) -> Target;
+maybe_append_test_case(Target, Case) ->
+    filename:join([Target, Case]).
 
 run_tests([], _) ->
     ok;
